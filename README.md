@@ -11,4 +11,3 @@ This repository contains a collection of PowerShell scripts and Azure DevOps pip
 ## 📢 Get in Touch
 Need a custom solution or want to discuss a specific use case? Feel free to reach out via LinkedIn (www.linkedin.com/in/maciej-kasperczyk-b425321a9) or email (maciej.kasperczyk.scriptify365@gmail.com). Let's automate IT together!
 
-Happy automating! 🚀
