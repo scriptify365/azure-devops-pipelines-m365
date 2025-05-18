@@ -1,0 +1,90 @@
+trigger: none
+
+pool:
+  vmImage: 'windows-latest'
+
+parameters:
+  - name: userEmail
+    displayName: 'User Email'
+    type: string
+    default: ''
+
+  - name: sharedMailbox
+    displayName: 'Shared Mailbox (email address)'
+    type: string
+    default: ''
+
+variables:
+  GRAPH_CLIENT_ID: $(GRAPH_CLIENT_ID_VAR)
+  GRAPH_TENANT_ID: $(GRAPH_TENANT_ID_VAR)
+
+steps:
+- task: AzureKeyVault@2
+  displayName: 'Retrieve GRAPH_CLIENT_SECRET from Azure Key Vault'
+  inputs:
+    azureSubscription: '#Name of the subscribtion'
+    KeyVaultName: '#Namer of the key Vault name'
+    SecretsFilter: '#Name of the secret'
+    RunAsPreJob: true
+
+- task: PowerShell@2
+  displayName: 'Store Graph Client Secret as Environment Variable'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $secretValue = "$(#name of the secret)"
+      if (-not $secretValue -or $secretValue -eq "" -or $secretValue -eq "***") {
+          Write-Host "ERROR: Secret is missing or masked!"
+          exit 1
+      }
+      Write-Host "##vso[task.setvariable variable=GRAPH_CLIENT_SECRET]$secretValue"
+
+- task: PowerShell@2
+  displayName: 'Generate EXO Access Token'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $body = @{
+          grant_type    = "client_credentials"
+          client_id     = "$(GRAPH_CLIENT_ID)"
+          client_secret = "$(GRAPH_CLIENT_SECRET)"
+          resource      = "https://outlook.office365.com"
+      }
+      $response = Invoke-RestMethod -Uri "https://login.microsoftonline.com/$(GRAPH_TENANT_ID)/oauth2/token" -Method POST -Body $body -ContentType "application/x-www-form-urlencoded"
+      if (-not $response.access_token) {
+          Write-Error "Unable to retrieve EXO access token."
+          exit 1
+      }
+      Write-Host "##vso[task.setvariable variable=exoAccessToken]$($response.access_token)"
+
+- task: PowerShell@2
+  displayName: 'Remove mailbox permissions'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $user = '${{ parameters.userEmail }}'
+      $shared = '${{ parameters.sharedMailbox }}'
+      $token = "$(exoAccessToken)"
+
+      if (-not (Get-Module -ListAvailable -Name ExchangeOnlineManagement)) {
+        Install-Module ExchangeOnlineManagement -Force -AllowClobber
+      }
+
+      Import-Module ExchangeOnlineManagement -Force
+
+      try {
+        Connect-ExchangeOnline -AccessToken $token -Organization "$(GRAPH_TENANT_ID)" -ShowBanner:$false
+
+        Write-Host "Removing FullAccess permission from $user on $shared"
+        Remove-MailboxPermission -Identity $shared -User $user -AccessRights FullAccess -Confirm:$false -ErrorAction SilentlyContinue
+
+        Write-Host "Removing SendAs permission from $user on $shared"
+        Remove-RecipientPermission -Identity $shared -Trustee $user -AccessRights SendAs -Confirm:$false -ErrorAction SilentlyContinue
+
+        Disconnect-ExchangeOnline -Confirm:$false
+        Write-Host "Access removed successfully."
+      }
+      catch {
+        Write-Error "Failed to remove permissions: $_"
+        exit 1
+      }
